@@ -1,0 +1,26 @@
+import { test, expect } from '@playwright/test';
+test('assignment API renders real books and free audio metadata', async ({ page }) => {
+  test.setTimeout(90000);
+  await page.goto('/for-you');
+  await expect(page.getByRole('heading', { name: 'Recommended for you' })).toBeVisible({ timeout: 30000 });
+  const cards = page.locator('.book-card');
+  expect(await cards.count()).toBeGreaterThan(1);
+  const freeCard = cards.filter({ hasNot: page.locator('.pill') }).first();
+  await freeCard.click();
+  await expect(page.getByRole('button', { name: 'Read', exact: true })).toBeVisible();
+  const bookPath = new URL(page.url()).pathname;
+  await page.getByRole('button', { name: 'Read', exact: true }).click();
+  await page.getByRole('button', { name: 'Login as a Guest' }).click();
+  await expect(page).toHaveURL(/for-you/);
+  await page.goto(bookPath.replace('/book/', '/player/'));
+  await expect(page.locator('.summary')).not.toBeEmpty({ timeout: 30000 });
+  await expect(page.getByRole('slider', { name: 'Audio position' })).toBeEnabled({ timeout: 30000 });
+  await page.getByRole('button', { name: 'Play', exact: true }).click();
+  await expect(page.getByRole('button', { name: 'Pause', exact: true })).toBeVisible();
+  await page.screenshot({ path: `test-results/live-player-${test.info().project.name}.png`, fullPage: false });
+  await page.goto('/for-you');
+  await expect(page.getByRole('heading', { name: 'Recommended for you' })).toBeVisible({ timeout: 30000 });
+  await expect(page.locator('.selected-details > img')).toHaveJSProperty('complete', true, { timeout: 20000 });
+  expect(await page.locator('.selected-details > img').evaluate((img: HTMLImageElement) => img.naturalWidth)).toBeGreaterThan(0);
+  await page.screenshot({ path: `test-results/live-for-you-${test.info().project.name}.png`, fullPage: false });
+});

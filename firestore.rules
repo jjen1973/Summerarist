@@ -1,0 +1,28 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
+    match /customers/{uid} {
+      allow read: if owner(uid);
+      match /checkout_sessions/{session} {
+        allow read: if owner(uid);
+        // Replace BOTH placeholders with Stripe test price IDs before deployment.
+        allow create: if owner(uid)
+          && request.auth.token.firebase.sign_in_provider != 'anonymous'
+          && request.resource.data.keys().hasOnly(['price', 'mode', 'success_url', 'cancel_url', 'trial_period_days'])
+          && request.resource.data.mode == 'subscription'
+          && ((request.resource.data.price == 'REPLACE_MONTHLY_PRICE_ID'
+              && !('trial_period_days' in request.resource.data))
+            || (request.resource.data.price == 'REPLACE_YEARLY_PRICE_ID'
+              && request.resource.data.trial_period_days == 7));
+      }
+      match /subscriptions/{subscription} { allow read: if owner(uid); }
+      match /payments/{payment} { allow read: if owner(uid); }
+    }
+    match /products/{product} {
+      allow read: if true;
+      match /prices/{price} { allow read: if true; }
+      match /tax_rates/{rate} { allow read: if true; }
+    }
+  }
+}

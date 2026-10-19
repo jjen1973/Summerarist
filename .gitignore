@@ -1,0 +1,12 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.*.local
+.tools/
+test-results/
+playwright-report/
+*.log
+*.tsbuildinfo
+.vscode/
+/Virtual Internship v2.pdf
