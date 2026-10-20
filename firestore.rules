@@ -1,28 +1,36 @@
 rules_version = '2';
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    function owner(uid) { return request.auth != null && request.auth.uid == uid; }
-    match /customers/{uid} {
-      allow read: if owner(uid);
-      match /checkout_sessions/{session} {
-        allow read: if owner(uid);
-        // Replace BOTH placeholders with Stripe test price IDs before deployment.
-        allow create: if owner(uid)
-          && request.auth.token.firebase.sign_in_provider != 'anonymous'
-          && request.resource.data.keys().hasOnly(['price', 'mode', 'success_url', 'cancel_url', 'trial_period_days'])
-          && request.resource.data.mode == 'subscription'
-          && ((request.resource.data.price == 'REPLACE_MONTHLY_PRICE_ID'
-              && !('trial_period_days' in request.resource.data))
-            || (request.resource.data.price == 'REPLACE_YEARLY_PRICE_ID'
-              && request.resource.data.trial_period_days == 7));
-      }
-      match /subscriptions/{subscription} { allow read: if owner(uid); }
-      match /payments/{payment} { allow read: if owner(uid); }
+    // Summarist: each account owns its saved and finished book IDs.
+    match /users/{userId}/library/shelf {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow create, update: if request.auth != null
+        && request.auth.uid == userId
+        && request.resource.data.keys().hasOnly(['saved', 'finished'])
+        && (!('saved' in request.resource.data) || request.resource.data.saved is list)
+        && (!('finished' in request.resource.data) || request.resource.data.finished is list);
     }
-    match /products/{product} {
+
+    // Subscription records are written only by the payment backend.
+    match /customers/{userId}/subscriptions/{subscriptionId} {
+      allow read: if request.auth != null && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    match /titles/{titleId} {
       allow read: if true;
-      match /prices/{price} { allow read: if true; }
-      match /tax_rates/{rate} { allow read: if true; }
+      allow write: if false;
+    }
+
+    match /users/{userId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId;
+    }
+
+    match /users/{userId}/myList/{titleId} {
+      allow read, write: if request.auth != null
+        && request.auth.uid == userId;
     }
   }
 }

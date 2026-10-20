@@ -1,5 +1,7 @@
 import { test, expect } from '@playwright/test';
-test('assignment API renders real books and free audio metadata', async ({ page }) => {
+import { mockAuth } from './helpers/mock-auth';
+test('assignment API renders real books and free audio metadata', async ({ page, context }) => {
+  await mockAuth(context);
   test.setTimeout(90000);
   await page.goto('/for-you');
   await expect(page.getByRole('heading', { name: 'Recommended for you' })).toBeVisible({ timeout: 30000 });

@@ -1,12 +1,19 @@
-import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { onAuthStateChanged, signOut, signInAnonymously } from 'firebase/auth';
-import { collection, onSnapshot, query, where } from 'firebase/firestore';
+import { arrayRemove, arrayUnion, collection, doc, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
 import { auth, db } from './firebase';
 type Session = { uid: string; email: string | null; guest: boolean };
 type Shelf = { saved: string[]; finished: string[] };
-type Context = { user: Session | null; ready: boolean; subscriptionReady: boolean; premium: string | null; modal: boolean; openAuth: () => void; closeAuth: () => void; guestLogin: () => Promise<void>; logout: () => Promise<void>; shelf: Shelf; toggleSaved: (id: string) => void; finish: (id: string) => void };
+type Context = { user: Session | null; ready: boolean; subscriptionReady: boolean; premium: string | null; modal: boolean; openAuth: () => void; closeAuth: () => void; guestLogin: () => Promise<void>; logout: () => Promise<void>; shelf: Shelf; libraryStatus: string; libraryError: string; retryLibrary: () => void; toggleSaved: (id: string) => void; finish: (id: string) => void };
 const Store = createContext<Context>(null!);
 const emptyShelf: Shelf = { saved: [], finished: [] };
+function readShelf(value: unknown): Shelf {
+  const data = value as Partial<Shelf> | null;
+  return { saved: Array.isArray(data?.saved) ? data.saved.filter((id): id is string => typeof id === 'string') : [], finished: Array.isArray(data?.finished) ? data.finished.filter((id): id is string => typeof id === 'string') : [] };
+}
+function cacheShelf(key: string, value: Shelf) {
+  try { localStorage.setItem(key, JSON.stringify(value)); } catch { /* usable without browser storage */ }
+}
 export function Provider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<Session | null>(null);
   const [ready, setReady] = useState(!auth);
@@ -14,6 +21,12 @@ export function Provider({ children }: { children: ReactNode }) {
   const [premium, setPremium] = useState<string | null>(null);
   const [subscriptionUid, setSubscriptionUid] = useState<string | null>(null);
   const [shelf, setShelf] = useState<Shelf>(emptyShelf);
+  const shelfRef = useRef<Shelf>(emptyShelf);
+  const shelfOwner = useRef<string | null>(null);
+  const [libraryStatus, setLibraryStatus] = useState('local');
+  const [libraryError, setLibraryError] = useState('');
+  const [libraryAttempt, setLibraryAttempt] = useState(0);
+  const pendingChanges = useRef(new Map<string, { field: 'saved' | 'finished'; id: string; included: boolean }>());
   useEffect(() => {
     if (!auth) {
       try { if (sessionStorage.getItem('summarist-guest')) setUser({ uid: 'local-guest', email: null, guest: true }); } catch { /* storage unavailable */ }
@@ -35,16 +48,96 @@ export function Provider({ children }: { children: ReactNode }) {
     }, () => { setPremium(null); setSubscriptionUid(user.uid); });
   }, [user]);
   useEffect(() => {
+    const uid = user?.uid || null;
+    const key = `summarist-shelf:${uid || 'signed-out'}`;
+    const pendingKey = `summarist-shelf-pending:${uid || 'signed-out'}`;
+    shelfOwner.current = uid;
+    let cached = emptyShelf;
     try {
-      const data = JSON.parse(localStorage.getItem(`summarist-shelf:${user?.uid || 'signed-out'}`) || 'null');
-      setShelf(data && Array.isArray(data.saved) && Array.isArray(data.finished) ? data : emptyShelf);
-    } catch { setShelf(emptyShelf); }
-  }, [user]);
-  function updateShelf(change: (previous: Shelf) => Shelf) {
-    setShelf(previous => {
-      const next = change(previous);
-      try { localStorage.setItem(`summarist-shelf:${user?.uid || 'signed-out'}`, JSON.stringify(next)); } catch { /* usable without persistence */ }
-      return next;
+      cached = readShelf(JSON.parse(localStorage.getItem(key) || 'null'));
+    } catch { /* start with an empty library */ }
+    try {
+      const pending = JSON.parse(localStorage.getItem(pendingKey) || '[]');
+      if (Array.isArray(pending)) for (const change of pending) {
+        if ((change.field === 'saved' || change.field === 'finished') && typeof change.id === 'string' && typeof change.included === 'boolean') {
+          const changeKey = `${uid}:${change.field}:${change.id}`;
+          if (!pendingChanges.current.has(changeKey)) pendingChanges.current.set(changeKey, change);
+        }
+      }
+    } catch { /* ignore invalid browser cache */ }
+    shelfRef.current = cached; setShelf(cached);
+    setLibraryError('');
+    if (!user || user.guest || !db) { setLibraryStatus('local'); return; }
+    let active = true;
+    let initialized = false;
+    setLibraryStatus('syncing');
+    const library = doc(db, 'users', user.uid, 'library', 'shelf');
+    function persistPending() {
+      try { localStorage.setItem(pendingKey, JSON.stringify([...pendingChanges.current].filter(([key]) => key.startsWith(`${uid}:`)).map(([, change]) => change))); } catch { /* storage unavailable */ }
+      if (active && ![...pendingChanges.current.keys()].some(key => key.startsWith(`${uid}:`))) { setLibraryStatus('synced'); setLibraryError(''); }
+    }
+    function failed() {
+      if (active) { setLibraryStatus('error'); setLibraryError('Your library could not sync with Firebase. Your books are kept in this browser. Check your connection and Firestore permissions, then retry.'); }
+    }
+    void setDoc(doc(db, 'users', user.uid), { email: user.email, updatedAt: serverTimestamp() }, { merge: true }).catch(failed);
+    const unsubscribe = onSnapshot(library, { includeMetadataChanges: true }, snapshot => {
+      if (!active) return;
+      // Wait for the server before deciding whether to migrate an existing browser library.
+      if (!initialized && snapshot.metadata.fromCache) return;
+      if (!initialized) {
+        initialized = true;
+        if (!snapshot.exists()) {
+          const migrating = [...pendingChanges.current].filter(([key]) => key.startsWith(`${uid}:`));
+          // Merge IDs atomically so a save made during initial sync cannot be overwritten.
+          void setDoc(library, { saved: arrayUnion(...cached.saved), finished: arrayUnion(...cached.finished) }, { merge: true }).then(() => {
+            for (const [key, change] of migrating) if (pendingChanges.current.get(key) === change) pendingChanges.current.delete(key);
+            persistPending();
+          }).catch(failed);
+          return;
+        }
+        // Retry only this browser's unsent edits; never overwrite another device's library.
+        for (const [changeKey, change] of pendingChanges.current) {
+          if (!changeKey.startsWith(`${uid}:`)) continue;
+          void setDoc(library, { [change.field]: change.included ? arrayUnion(change.id) : arrayRemove(change.id) }, { merge: true }).then(() => {
+            if (pendingChanges.current.get(changeKey) === change) pendingChanges.current.delete(changeKey);
+            persistPending();
+          }).catch(failed);
+        }
+      }
+      const next = readShelf(snapshot.data());
+      for (const [changeKey, change] of pendingChanges.current) {
+        if (!changeKey.startsWith(`${uid}:`)) continue;
+        next[change.field] = change.included ? [...new Set([...next[change.field], change.id])] : next[change.field].filter(id => id !== change.id);
+      }
+      shelfRef.current = next; setShelf(next); cacheShelf(key, next);
+      if (!snapshot.metadata.hasPendingWrites && !snapshot.metadata.fromCache && ![...pendingChanges.current.keys()].some(key => key.startsWith(`${uid}:`))) {
+        setLibraryStatus('synced'); setLibraryError('');
+      } else setLibraryStatus('syncing');
+    }, failed);
+    return () => { active = false; unsubscribe(); };
+  }, [user, libraryAttempt]);
+  function updateShelf(field: 'saved' | 'finished', id: string, included: boolean) {
+    if (shelfOwner.current !== (user?.uid || null)) return;
+    const previous = shelfRef.current;
+    const next = { ...previous, [field]: included ? [...new Set([...previous[field], id])] : previous[field].filter(value => value !== id) };
+    shelfRef.current = next; setShelf(next);
+    cacheShelf(`summarist-shelf:${user?.uid || 'signed-out'}`, next);
+    if (!user || user.guest || !db) return;
+    const uid = user.uid;
+    const changeKey = `${uid}:${field}:${id}`;
+    const change = { field, id, included };
+    pendingChanges.current.set(changeKey, change);
+    const persistPending = () => {
+      try { localStorage.setItem(`summarist-shelf-pending:${uid}`, JSON.stringify([...pendingChanges.current].filter(([key]) => key.startsWith(`${uid}:`)).map(([, value]) => value))); } catch { /* storage unavailable */ }
+    };
+    persistPending();
+    setLibraryStatus('syncing');
+    void setDoc(doc(db, 'users', uid, 'library', 'shelf'), { [field]: included ? arrayUnion(id) : arrayRemove(id) }, { merge: true }).then(() => {
+      if (pendingChanges.current.get(changeKey) === change) pendingChanges.current.delete(changeKey);
+      persistPending();
+      if (shelfOwner.current === uid && ![...pendingChanges.current.keys()].some(key => key.startsWith(`${uid}:`))) { setLibraryStatus('synced'); setLibraryError(''); }
+    }).catch(() => {
+      if (shelfOwner.current === uid) { setLibraryStatus('error'); setLibraryError('Your library could not sync with Firebase. Your books are kept in this browser. Check your connection and Firestore permissions, then retry.'); }
     });
   }
   async function guestLogin() {
@@ -58,9 +151,9 @@ export function Provider({ children }: { children: ReactNode }) {
     setUser(null); setPremium(null);
   }
   const subscriptionReady = !user || user.guest || !db || subscriptionUid === user.uid;
-  return <Store.Provider value={{ user, ready, subscriptionReady, premium, modal, openAuth: () => setModal(true), closeAuth: () => setModal(false), guestLogin, logout, shelf,
-    toggleSaved: id => updateShelf(s => ({ ...s, saved: s.saved.includes(id) ? s.saved.filter(x => x !== id) : [...s.saved, id] })),
-    finish: id => updateShelf(s => ({ ...s, finished: [...new Set([...s.finished, id])] })),
+  return <Store.Provider value={{ user, ready, subscriptionReady, premium, modal, openAuth: () => setModal(true), closeAuth: () => setModal(false), guestLogin, logout, shelf, libraryStatus, libraryError, retryLibrary: () => setLibraryAttempt(value => value + 1),
+    toggleSaved: id => updateShelf('saved', id, !shelfRef.current.saved.includes(id)),
+    finish: id => updateShelf('finished', id, true),
   }}>{children}</Store.Provider>;
 }
 export const useStore = () => useContext(Store);
