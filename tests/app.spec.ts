@@ -103,3 +103,52 @@ test('checkout waits for Firebase to restore the saved sign-in', async ({ contex
   await expect(page.getByRole('alert')).toHaveText('Test checkout is not configured.');
   await expect(page.getByRole('dialog')).not.toBeVisible();
 });
+
+test('homepage navigation works on phones and desktop', async ({ page }) => {
+  await page.goto('/');
+  const nav = page.getByRole('navigation', { name: 'Homepage navigation' });
+  if (page.viewportSize()!.width <= 600) {
+    const toggle = page.getByRole('button', { name: 'Open menu', exact: true });
+    await expect(nav).not.toBeVisible();
+    await toggle.click();
+    await expect(page.getByRole('button', { name: 'Close menu' })).toHaveAttribute('aria-expanded', 'true');
+    for (const label of ['About', 'Pricing', 'Help']) await expect(nav.getByRole('link', { name: label, exact: true })).toBeVisible();
+    await nav.getByRole('link', { name: 'About', exact: true }).click();
+    await expect(page).toHaveURL(/#about$/);
+    await expect(nav).not.toBeVisible();
+    await toggle.click();
+    await page.keyboard.press('Escape');
+    await expect(toggle).toBeFocused();
+    await expect(nav).not.toBeVisible();
+    await toggle.click();
+    await page.locator('.hero-image').click();
+    await expect(nav).not.toBeVisible();
+    await toggle.click();
+  } else {
+    await expect(page.getByRole('button', { name: 'Open menu', exact: true })).not.toBeVisible();
+    await expect(nav).toBeVisible();
+  }
+  await nav.getByRole('link', { name: 'Pricing', exact: true }).click();
+  await expect(page).toHaveURL(/choose-plan$/);
+  await page.goto('/');
+  if (page.viewportSize()!.width <= 600) await page.getByRole('button', { name: 'Open menu', exact: true }).click();
+  await nav.getByRole('button', { name: 'Login', exact: true }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+});
+
+test('homepage menu stays within narrow screens and resets after resizing', async ({ page }) => {
+  await page.goto('/');
+  for (const width of [320, 375, 600]) {
+    await page.setViewportSize({ width, height: 812 });
+    await page.getByRole('button', { name: 'Open menu', exact: true }).click();
+    const nav = page.getByRole('navigation', { name: 'Homepage navigation' });
+    const box = await nav.boundingBox();
+    expect(box!.x).toBeGreaterThanOrEqual(0);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(width);
+    for (const target of await nav.locator('a,button').all()) expect((await target.boundingBox())!.height).toBeGreaterThanOrEqual(44);
+    await page.setViewportSize({ width: 768, height: 812 });
+    await expect(nav).toBeVisible();
+    await page.setViewportSize({ width, height: 812 });
+    await expect(nav).not.toBeVisible();
+  }
+});
