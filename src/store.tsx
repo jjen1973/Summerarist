@@ -1,7 +1,7 @@
 import { createContext, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
 import { onAuthStateChanged, signOut, signInAnonymously } from 'firebase/auth';
 import { arrayRemove, arrayUnion, collection, doc, onSnapshot, query, serverTimestamp, setDoc, where } from 'firebase/firestore';
-import { auth, db } from './firebase';
+import { auth, db, localStripeEnabled, getLocalSubscription, getSubscription } from './firebase';
 type Session = { uid: string; email: string | null; guest: boolean };
 type Shelf = { saved: string[]; finished: string[] };
 type Context = { user: Session | null; ready: boolean; subscriptionReady: boolean; premium: string | null; modal: boolean; openAuth: () => void; closeAuth: () => void; guestLogin: () => Promise<void>; logout: () => Promise<void>; shelf: Shelf; libraryStatus: string; libraryError: string; retryLibrary: () => void; toggleSaved: (id: string) => void; finish: (id: string) => void };
@@ -41,11 +41,32 @@ export function Provider({ children }: { children: ReactNode }) {
     setPremium(null);
     setSubscriptionUid(null);
     if (!user || !db || user.guest) return;
-    return onSnapshot(query(collection(db, 'customers', user.uid, 'subscriptions'), where('status', 'in', ['trialing', 'active'])), snapshot => {
-      const subscription = snapshot.docs[0]?.data();
-      setPremium(subscription ? (subscription.role || 'premium') : null);
+    if (localStripeEnabled) {
+      let active = true;
+      const refresh = () => { void getLocalSubscription().then(value => { if (active) setPremium(value.premium); }).catch(() => { if (active) setPremium(null); }).finally(() => { if (active) setSubscriptionUid(user.uid); }); };
+      refresh();
+      window.addEventListener('focus', refresh);
+      return () => { active = false; window.removeEventListener('focus', refresh); };
+    }
+    const refresh = () => { void getSubscription().catch(() => { /* Firestore remains the last verified state. */ }); };
+    refresh();
+    window.addEventListener('focus', refresh);
+    let expiryTimer: ReturnType<typeof setTimeout> | undefined;
+    const unsubscribe = onSnapshot(query(collection(db, 'customers', user.uid, 'subscriptions'), where('status', 'in', ['trialing', 'active'])), snapshot => {
+      clearTimeout(expiryTimer);
+      const subscription = snapshot.docs.map(doc => doc.data()).find(value => value.environment === 'test' && ['premium','premium-plus'].includes(value.role) && value.entitlementUntil * 1000 > Date.now());
+      setPremium(subscription?.role || null);
+      if (subscription) {
+        const checkExpiry = () => {
+          const remaining = subscription.entitlementUntil * 1000 - Date.now();
+          if (remaining <= 0) { setPremium(null); refresh(); }
+          else expiryTimer = setTimeout(checkExpiry, Math.min(remaining, 2147483647));
+        };
+        checkExpiry();
+      }
       setSubscriptionUid(user.uid);
     }, () => { setPremium(null); setSubscriptionUid(user.uid); });
+    return () => { unsubscribe(); clearTimeout(expiryTimer); window.removeEventListener('focus', refresh); };
   }, [user]);
   useEffect(() => {
     const uid = user?.uid || null;

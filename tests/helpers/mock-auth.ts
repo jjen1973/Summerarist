@@ -29,6 +29,6 @@ export async function mockAuth(context: BrowserContext) {
   await context.route('**/firebase_auth.js*', route => route.fulfill({ contentType: 'text/javascript', body: source }));
   await context.route('**/src/firebase.ts*', route => route.fulfill({
     contentType: 'text/javascript',
-    body: `export const configured = true; export const auth = {}; export const db = null; export async function checkout() { throw new Error('Test checkout is not configured.'); }`,
+    body: `export const configured = true; export const auth = {}; export const db = null; export const localStripeEnabled = false; export const getLocalSubscription = async () => ({premium:null,status:'basic'}); export const cancelLocalSubscription = async () => ({}); export const getSubscription = async () => ({premium:null,status:'basic'}); export const cancelSubscription = async () => ({premium:null,status:'canceled'}); export async function checkout() { throw new Error('Test checkout is not configured.'); }`,
   }));
 }

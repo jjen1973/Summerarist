@@ -1,4 +1,18 @@
 {
+  "functions": [{ "source": "functions", "codebase": "summarist-sandbox", "runtime": "nodejs22", "ignore": ["node_modules", "test", "*.log", ".env*", ".secret*"] }],
+  "hosting": {
+    "site": "fir-practice-e7875",
+    "public": "dist",
+    "ignore": ["firebase.json", "**/.*", "**/node_modules/**"],
+    "rewrites": [
+      { "source": "/api/stripe-sandbox/**", "function": { "functionId": "summaristSandbox", "region": "us-central1" } },
+      { "source": "**", "destination": "/index.html" }
+    ],
+    "headers": [
+      { "source": "**", "headers": [{ "key": "X-Content-Type-Options", "value": "nosniff" }, { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }] },
+      { "source": "/assets/**", "headers": [{ "key": "Cache-Control", "value": "public, max-age=3600" }] }
+    ]
+  },
   "firestore": {
     "rules": "firestore.rules"
   }

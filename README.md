@@ -1,6 +1,6 @@
 # Summarist
 
-React + TypeScript implementation of **Virtual Internship v2.pdf**. Built locally from the assignment brief and its supplied artwork. Firebase Authentication and library sync are connected to `fir-practice-e7875` and live-verified. Firestore rules and authentication settings were updated on October 19, 2026. The website has not been deployed.
+React + TypeScript implementation of **Virtual Internship v2.pdf**. Built locally from the assignment brief and its supplied artwork. Firebase Authentication and library sync are connected to `fir-practice-e7875` and live-verified. Firestore rules and authentication settings were updated on October 19, 2026. The public Stripe Sandbox site is deployed at https://fir-practice-e7875.web.app; see docs/SANDBOX_DEPLOYMENT.md for verification details.
 
 Registered accounts now sync saved and finished book IDs to `users/{uid}/library/shelf`, and write email and a server timestamp to `users/{uid}`. Guests keep their library in the current browser. Existing browser libraries migrate when no cloud shelf exists; failed edits stay cached and can be retried in My Library. The cloud-library browser tests mock Firebase and never write to the real project.
 
@@ -36,7 +36,7 @@ Browser tests use installed Microsoft Edge. `tests/app.spec.ts` uses determinist
 - Login and subscription route checks, including direct player URLs.
 - Saved/finished library with Firestore account sync, browser backup, visible sync errors and retry. Listening to the end marks a book finished.
 - Settings with guest/email identity and subscription status.
-- Monthly/yearly plan selection, FAQ accordions, and Firebase Stripe-extension checkout integration. Yearly checkout requests a 7-day trial.
+- Monthly/yearly plan selection, FAQ accordions, and Stripe Sandbox hosted checkout backed by Firebase Functions. Yearly checkout includes a 7-day trial.
 - Loading skeletons, error/retry states, keyboard-accessible modal, focus indicators, responsive navigation.
 - Vercel SPA routing configuration and a Firestore rules template.
 
@@ -44,11 +44,9 @@ Browser tests use installed Microsoft Edge. `tests/app.spec.ts` uses determinist
 
 Firebase is connected and verified for local development. Published rules preserve the old project's rules and add owner-only library access. Email/password, Google and anonymous providers are enabled. Both local development hostnames are authorized. Google account selection and password-reset email delivery still need a manual check.
 
-The remaining required PDF feature is real Stripe test checkout. The user does not yet have a Stripe account. The monthly/yearly sales UI, seven-day annual trial request and checkout adapter are implemented, but no test price IDs, checkout backend, or webhooks are configured. No payments were collected and Firebase billing was not enabled.
+The public Stripe Sandbox implementation uses Firebase Hosting and a dedicated Node 22 HTTP function, with Firebase Admin SDK writes to each user's owner-readable subscription records. Monthly is $9.99 and yearly is $99.99 with a seven-day trial. No live Stripe keys or real payments are supported. The original local proof of concept stays in the ignored `.tools/stripe-sandbox` folder and can still run independently.
 
-Create a Stripe account and use its sandbox/test environment. The configured display prices are $9.99 monthly and $99.99 annually; use matching test prices and subscription roles `premium` / `premium-plus`. Store only public price IDs in `.env.local`; keep private keys in the payment backend's secret store. After choosing and configuring the backend, allow only approved checkout fields/prices in Firestore and test checkout, the annual trial, webhook-confirmed access, cancellation, and Settings updates. Never grant access based only on a checkout success URL.
-
-The [Run Payments with Stripe extension](https://extensions.dev/extensions/invertase/firestore-stripe-payments) still documents the contract used by `src/firebase.ts`, but it requires the Blaze billing plan and is affected by Firebase Extensions' announced March 31, 2027 shutdown. Backend selection and billing need a separate decision. Current rules intentionally deny client subscription writes and do not enable checkout writes before a backend and real test prices exist.
+The backend verifies Firebase authentication, approved Stripe prices, test mode, customer ownership, and raw-body webhook signatures. Stripe secrets belong only in Firebase Secret Manager. Clients cannot write subscription records. See [public Sandbox deployment notes](docs/SANDBOX_DEPLOYMENT.md) for the exact cloud resources, private configuration, test coverage, and remaining live checks. The user explicitly authorized storing both test secrets in Secret Manager and publishing the Sandbox backend and site. Blaze is enabled; runtime limits and one-day deployment-image cleanup are configured.
 
 See [the PDF requirement checklist](docs/ASSIGNMENT_STATUS.md) for completed features and remaining manual/payment checks. The supplied public book API is suitable for the assignment; frontend premium checks do not protect commercial paid content at the backend.
 
@@ -60,13 +58,13 @@ See [the PDF requirement checklist](docs/ASSIGNMENT_STATUS.md) for completed fea
 - Real supplied API checks verify book rendering, cover images and free-book audio playback.
 - Live Firebase verification passed registration/login, guest login, saved and finished book writes, removals, restore after logout/login, signed-out and cross-account denial, and prevention of client subscription grants.
 - A separate actual-app browser check passed real registration, saving a book, reload, logout/login and restored My Library. All temporary accounts and test documents were removed.
-- Interactive Google account selection, password-reset email receipt, Stripe checkout/webhooks and public website hosting remain manual or pending checks.
+- Public signup/login, both genuine Stripe-hosted checkouts, Firebase subscription persistence, separate-browser restoration, premium reader access, cancellation and hosted webhook receipts were live verified. Interactive Google account selection and password-reset email receipt still need a manual check.
 
 ## Repository and deployment
 
-Repository: https://github.com/jjen1973/Summerarist. The initial source is prepared for this repository. `.tools/`, `node_modules/`, builds, local environment files, browser-test artifacts, editor settings, and the original assignment PDF are ignored. The PDF remains in the local project folder.
+Repository: https://github.com/jjen1973/Summerarist. The source is in this repository; this repository contains the source for the deployed Sandbox integration. `.tools/`, `node_modules/`, builds, local environment files, browser-test artifacts, editor settings, and the original assignment PDF are ignored. The PDF remains in the local project folder.
 
-For a later Vercel deployment: use Vite, build command `npm run build`, output `dist`, and configure the same public environment variables in the dashboard. `vercel.json` supports direct navigation to application routes. Deployment has not been performed.
+For a later Vercel deployment: use Vite, build command `npm run build`, output `dist`, and configure the same public environment variables in the dashboard. `vercel.json` supports direct navigation to application routes. Firebase Hosting is now used for the public Sandbox instead of Vercel.
 
 ## Sources
 
@@ -74,7 +72,7 @@ For a later Vercel deployment: use Vite, build command `npm run build`, output `
 - [Starter homepage and assets](https://github.com/hannamitri/summarist-home-page). Artwork in `public/assets/` originates here; check upstream usage terms before publishing beyond the assignment.
 - [Reference solution](https://summarist.vercel.app/).
 - [Firebase password authentication](https://firebase.google.com/docs/auth/web/password-auth).
-- [Stripe extension setup and checkout contract](https://github.com/invertase/stripe-firebase-extensions/blob/next/firestore-stripe-payments/POSTINSTALL.md).
+- [Stripe hosted subscription checkout](https://docs.stripe.com/payments/checkout/build-subscriptions).
 
 The book API base is `https://us-central1-summaristt.cloudfunctions.net`. No third-party credentials are copied from the reference application.
 

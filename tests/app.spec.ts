@@ -89,3 +89,17 @@ test('book actions wait for the saved sign-in session before saving', async ({ c
   await page.goto('/library');
   await expect(page.getByRole('heading', { name: 'Saved books (1)' })).toBeVisible();
 });
+
+test('checkout waits for Firebase to restore the saved sign-in', async ({ context, page }) => {
+  await context.addInitScript(() => {
+    sessionStorage.setItem('test-auth-user', JSON.stringify({ uid: 'test-reader', email: 'reader@example.com', isAnonymous: false }));
+    sessionStorage.setItem('test-auth-delay', '1500');
+  });
+  await page.goto('/choose-plan');
+  const checkout = page.getByRole('button', { name: 'Start your 7-day free trial', exact: true });
+  await expect(checkout).toBeDisabled();
+  await expect(checkout).toBeEnabled();
+  await checkout.click();
+  await expect(page.getByRole('alert')).toHaveText('Test checkout is not configured.');
+  await expect(page.getByRole('dialog')).not.toBeVisible();
+});
